@@ -1,0 +1,75 @@
+import time
+from controller import Controller
+
+motor = Controller()
+
+SAMPLE_DT = 0.05
+
+# Identified parameters (per motor)
+B0_L = 40.0
+B0_R = 33.0
+UD_L = 35.0   # deadzone threshold (PWM)
+UD_R = 28.0
+
+KP = 0.02
+KI = 0.3
+KD = 0.0001
+
+def measure_velocity(dt):
+    l1, r1 = motor.get_encoder_ticks()
+    time.sleep(dt)
+    l2, r2 = motor.get_encoder_ticks()
+    return (l2 - l1) / dt, (r2 - r1) / dt
+
+def deadzone_inverse(u_lin, ud):
+    if u_lin <= 0:
+        return 0.0
+    return u_lin + ud
+
+def run_deadzone_compensated_pid(target_left, target_right, run_time=5.0):
+    err_int_L = 0.0
+    err_int_R = 0.0
+    last_vL = 0.0
+    last_vR = 0.0
+
+    t0 = time.time()
+    print("Per-motor PID with model-based feedforward + deadzone inverse")
+
+    while time.time() - t0 < run_time:
+        vL, vR = measure_velocity(SAMPLE_DT)
+
+        # errors
+        eL = target_left - vL
+        eR = target_right - vR
+
+        err_int_L += eL * SAMPLE_DT
+        err_int_R += eR * SAMPLE_DT
+
+        dvL = (vL - last_vL) / SAMPLE_DT
+        dvR = (vR - last_vR) / SAMPLE_DT
+        last_vL = vL
+        last_vR = vR
+
+        # linear feedforward
+        u_ff_L = target_left / B0_L
+        u_ff_R = target_right / B0_R
+
+        # linear PID correction
+        u_lin_L = u_ff_L + KP * eL + KI * err_int_L - KD * dvL
+        u_lin_R = u_ff_R + KP * eR + KI * err_int_R - KD * dvR
+
+        # deadzone inverse (nonlinear compensation)
+        uL = deadzone_inverse(u_lin_L, UD_L)
+        uR = deadzone_inverse(u_lin_R, UD_R)
+
+        # saturation
+        uL = max(min(uL, 127), 0)
+        uR = max(min(uR, 127), 0)
+
+        motor.set_raw_motor_speed(int(uL), int(uR))
+
+        print(f"L: v={vL:.1f} u={uL:.1f} | R: v={vR:.1f} u={uR:.1f}")
+
+    motor.set_raw_motor_speed(0, 0)
+    print("Motors stopped")
+run_deadzone_compensated_pid(2900,2900,2)
