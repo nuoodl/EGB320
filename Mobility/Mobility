@@ -1,0 +1,97 @@
+import time
+from controller import Controller
+
+# Initialize the motor hardware controller
+motor_driver = Controller()
+
+# Configuration constants expected by check_mobility.py and internal math
+WHEELBASE = 0.119         # 119 mm in meters
+HALF_BASE_MM = 119 / 2.0  # Wheelbase / 2 in mm
+MAX_WHEEL_SPEED = 0.250   # 250 mm/s in m/s
+MIN_RAW = 27              # Minimum raw power baseline (STALL_POWER equivalent)
+
+# Internal timing and encoder conversion constants
+DT = 0.03                 # 33Hz loop execution rate
+TICKS_PER_MM = 1400 / 93.0
+MAX_POWER = 127
+
+# Closed-loop gains
+KI = 0.5
+KD = 0.0007
+KSYNC_DIST = 0.5
+
+# Internal state persistence for velocity_step
+_last_vL = 0.0
+_last_vR = 0.0
+_iL = 0.0
+_iR = 0.0
+_progress_L = 0.0
+_progress_R = 0.0
+
+
+def _to_raw(v_m_s):
+    """Converts a lineal speed (m/s) to an estimated raw motor speed."""
+    scaled = (v_m_s / MAX_POWER) if MAX_POWER else 0
+    return int(max(min(scaled * 127, 127), -127))
+
+
+def stop():
+    """Stops both motors instantly and resets closed-loop accumulators."""
+    global _last_vL, _last_vR, _iL, _iR, _progress_L, _progress_R
+    motor_driver.set_raw_motor_speed(0, 0)
+    _last_vL = _last_vR = _iL = _iR = _progress_L = _progress_R = 0.0
+
+
+def drive(v, w):
+    """
+    Accepts linear velocity v (m/s) and angular velocity w (rad/s).
+    Executes differential drive kinematics and updates velocity control.
+    """
+    global _last_vL, _last_vR, _iL, _iR, _progress_L, _progress_R
+
+    # Differential drive kinematics: convert (m/s, rad/s) -> left/right (mm/s)
+    target_left_mm_s = (v - (w * WHEELBASE / 2.0)) * 1000.0
+    target_right_mm_s = (v + (w * WHEELBASE / 2.0)) * 1000.0
+
+    target_left_ticks = target_left_mm_s * TICKS_PER_MM
+    target_right_ticks = target_right_mm_s * TICKS_PER_MM
+
+    # Hardware tick readings
+    dL, dR = motor_driver.get_encoder_ticks()
+    vL = dL / DT
+    vR = dR / DT
+
+    # Velocity errors
+    errL = target_left_ticks - vL
+    errR = target_right_ticks - vR
+
+    # Integrator calculation
+    _iL = max(min(_iL + KI * errL * DT, 180), -80)
+    _iR = max(min(_iR + KI * errR * DT, 180), -80)
+
+    # Base duty cycle estimation
+    baseL = (MIN_RAW + 0.3333 * abs(target_left_mm_s)) * (1 if target_left_mm_s >= 0 else -1)
+    baseR = (MIN_RAW + 0.3333 * abs(target_right_mm_s)) * (1 if target_right_mm_s >= 0 else -1)
+
+    # Derivative dampening
+    accelL = (vL - _last_vL) / DT
+    accelR = (vR - _last_vR) / DT
+
+    dTermL = KD * accelL
+    dTermR = KD * accelR
+
+    # Distance synchronization tracking
+    _progress_L += dL
+    _progress_R += dR
+    dist_error = _progress_L - _progress_R
+    sync = KSYNC_DIST * dist_error
+
+    # Output calculation
+    uL = max(min(baseL + _iL - dTermL - sync, MAX_POWER), -MAX_POWER)
+    uR = max(min(baseR + _iR - dTermR - sync, MAX_POWER), -MAX_POWER)
+
+    # Drive hardware motors
+    motor_driver.set_raw_motor_speed(int(uL), int(uR))
+
+    # Save state variables
+    _last_vL, _last_vR = vL, vR
