@@ -34,9 +34,9 @@
 const int SERVO_PIN = 18;
 
 // ---- servo angles, degrees ----
-const int ANGLE_OPEN  = 95;   // lowered / open, ready to take the victim
-const int ANGLE_CLAMP = 40;   // clamped on the victim
-const int ANGLE_IDLE  = 40;   // travelling with no victim in sight.
+const int ANGLE_OPEN  = 146;   // lowered / open, ready to take the victim
+const int ANGLE_CLAMP = 90;   // clamped on the victim
+const int ANGLE_IDLE  = 85;   // travelling with no victim in sight.
                               // CHANGE THIS if idle should be a different angle.
 
 const int MOVE_STEP_MS = 12;  // ms per degree - slower = gentler on the token
